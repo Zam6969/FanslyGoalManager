@@ -1,11 +1,11 @@
 # FanslyGoalManager
 
-Features
--Save Goals with the amount and label and description
--Create presets to send that save locally in the user folder in the (fansly_config.json) folder
--view current goals
--Delete all goals
--update goals
+Features\n
+-Save Goals with the amount and label and description\n
+-Create presets to send that save locally in the user folder in the (fansly_config.json) folder\n
+-view current goals\n
+-Delete all goals\n
+-update goals\n
 
 <img width="1002" height="632" alt="FanslyGoalManager_4M11dMW14X" src="https://github.com/user-attachments/assets/1d1cdf27-edac-4df3-8034-3316f5c945e2" />
 
