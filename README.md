@@ -4,8 +4,7 @@ Features
 
 -Save Goals with the amount and label and description
 
--Create presets to send that save locally in the user folder in the (fansly_config.json) folder
-
+-Create presets to send that save locally in the user folder in the (fansly_config.json) 
 -view current goals
 
 -Delete all goals
