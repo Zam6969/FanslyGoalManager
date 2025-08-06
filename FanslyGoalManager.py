@@ -1,377 +1,419 @@
-import os, sys, json, time, requests, textwrap
-import customtkinter as ctk
-from tkinter import messagebox
+import os
+import sys
+import json
+import time
+import textwrap
+import requests
+import webbrowser
 
-# ————— Config handling —————
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QLineEdit, QTextEdit, QPushButton, QTabWidget, QRadioButton,
+    QButtonGroup, QMessageBox
+)
+from PySide6.QtGui import QFont, QPalette, QColor
+from PySide6.QtCore import Qt
+
+# --- Program version ---
+PROGRAM_VERSION = "1.0.3"
+UPDATE_CHECK_URL = "https://raw.githubusercontent.com/Zam6969/FanslyGoalManager/refs/heads/main/version.txt"
+GITHUB_REPO_URL = "https://github.com/Zam6969/FanslyGoalManager"
+
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "fansly_config.json")
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             d = json.load(f)
         return d.get("AUTH_TOKEN"), d.get("CHATROOM_ID"), d.get("PRESETS", {})
     return None, None, {}
 
 def save_config(auth, chat_id, presets):
-    with open(CONFIG_PATH, "w") as f:
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         json.dump({
             "AUTH_TOKEN": auth,
             "CHATROOM_ID": chat_id,
             "PRESETS": presets
         }, f, indent=2)
 
-def prompt_config():
-    dlg = ctk.CTk()
-    dlg.title("Setup Config")
-    dlg.resizable(False, False)
-    w, h = 400, 220
-    sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
-    dlg.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
-    dlg.grid_columnconfigure(0, weight=1)
-
-    ctk.CTkLabel(dlg, text="Auth Token:", anchor="w")\
-       .grid(row=0, column=0, padx=20, pady=(20,4), sticky="ew")
-    e1 = ctk.CTkEntry(dlg)
-    e1.grid(row=1, column=0, padx=20, pady=(0,10), sticky="ew")
-
-    ctk.CTkLabel(dlg, text="ChatRoom ID:", anchor="w")\
-       .grid(row=2, column=0, padx=20, pady=(0,4), sticky="ew")
-    e2 = ctk.CTkEntry(dlg)
-    e2.grid(row=3, column=0, padx=20, pady=(0,10), sticky="ew")
-
-    def on_close():
-        dlg.destroy()
-        sys.exit()
-    dlg.protocol("WM_DELETE_WINDOW", on_close)
-
-    def save_and_go():
-        tok, cid = e1.get().strip(), e2.get().strip()
-        if not tok or not cid:
-            return messagebox.showwarning("Missing", "All fields required", parent=dlg)
-        save_config(tok, cid, {})
-        dlg.destroy()
-
-    ctk.CTkButton(dlg, text="Save", command=save_and_go)\
-       .grid(row=4, column=0, pady=10)
-    dlg.mainloop()
-
-# ————— Initialize —————
-ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("blue")
-
-AUTH_TOKEN, CHATROOM_ID, loaded_presets = load_config()
-if not AUTH_TOKEN or not CHATROOM_ID:
-    prompt_config()
-    AUTH_TOKEN, CHATROOM_ID, loaded_presets = load_config()
-
-HEADERS      = {"Content-Type": "application/json", "Authorization": AUTH_TOKEN}
-BASE_URL     = "https://apiv3.fansly.com/api/v1/chatroom/goals"
-FETCH_PARAMS = {"chatRoomIds": CHATROOM_ID, "ngsw-bypass": "true"}
-CREATE_URL   = BASE_URL + "?ngsw-bypass=true"
-UPDATE_URL   = "https://apiv3.fansly.com/api/v1/chatroom/goal/update?ngsw-bypass=true"
-
-# ————— State —————
-entry_amount = entry_label = entry_desc = update_btn = None
-goals_dict = {}
-presets = {g:{s:None for s in (1,2,3)} for g in (1,2,3)}
-for g_str, slots in loaded_presets.items():
+def check_for_update():
     try:
-        g = int(g_str)
-        for s_str, payload in slots.items():
-            presets[g][int(s_str)] = payload
-    except:
-        pass
+        r = requests.get(UPDATE_CHECK_URL, timeout=5)
+        r.raise_for_status()
+        latest = r.text.strip()
+        if latest != PROGRAM_VERSION:
+            msg = (f"A new version is available!\n\n"
+                   f"Your version: {PROGRAM_VERSION}\n"
+                   f"Latest version: {latest}\n\n"
+                   f"Would you like to open the GitHub repo to download it?")
+            
+            dlg = QMessageBox()
+            dlg.setWindowTitle("Update Available")
+            dlg.setText(msg)
+            dlg.setIcon(QMessageBox.Information)
 
-# ————— Build window & StringVar —————
-app = ctk.CTk()
-app.title("Fansly Goal Manager")
-app.geometry("1000x600")
-sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
-app.geometry(f"1000x600+{(sw-1000)//2}+{(sh-600)//2}")
-app.grid_columnconfigure((0,1,2), weight=1)
-app.grid_rowconfigure(0, weight=1)
+            open_btn = dlg.addButton("Open Repo", QMessageBox.AcceptRole)
+            ok_btn = dlg.addButton("OK", QMessageBox.RejectRole)
 
-selected_goal_var = ctk.StringVar(app)
+            dlg.exec()
 
-# ————— API Actions —————
-def fetch_and_display_goals():
-    global goals_list_frame
-    resp = requests.get(BASE_URL, params=FETCH_PARAMS, headers=HEADERS)
-    if resp.status_code != 200:
-        return messagebox.showerror("Error", f"Fetch failed: {resp.status_code}")
-    goals_list_frame.destroy()
-    build_goals_list(right_frame)
+            if dlg.clickedButton() == open_btn:
+                webbrowser.open(GITHUB_REPO_URL)
+    except Exception as e:
+        print(f"[WARN] Version check failed: {e}")
 
-def build_goals_list(parent):
-    global goals_list_frame, goals_dict
-    goals_list_frame = ctk.CTkFrame(parent, fg_color="#1f1f1f")
-    goals_list_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-    parent.grid_rowconfigure(1, weight=1)
-    parent.grid_columnconfigure(0, weight=1)
+class ConfigDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Setup Config")
+        self.setModal(True)
+        self.resize(400, 200)
+        layout = QVBoxLayout(self)
 
-    goals_dict.clear()
-    resp = requests.get(BASE_URL, params=FETCH_PARAMS, headers=HEADERS)
-    for idx, g in enumerate(resp.json().get("response", [])[:3]):
-        goals_dict[g["id"]] = g
+        font = QFont("Segoe UI Emoji", 12)
+        layout.addWidget(QLabel("Auth Token:"))
+        self.auth_in = QLineEdit(); self.auth_in.setFont(font)
+        layout.addWidget(self.auth_in)
 
-        # container for each goal
-        container = ctk.CTkFrame(goals_list_frame, fg_color="transparent")
-        container.grid(row=idx, column=0, sticky="ew", padx=8, pady=4)
-        container.grid_columnconfigure(1, weight=1)
+        layout.addWidget(QLabel("ChatRoom ID:"))
+        self.chatid_in = QLineEdit(); self.chatid_in.setFont(font)
+        layout.addWidget(self.chatid_in)
 
-        # radio button with no text
-        rb = ctk.CTkRadioButton(
-            container,
-            text="",                      # ← hide the built-in label
-            variable=selected_goal_var,
-            value=g["id"],
-            command=on_select_goal
-        )
-        rb.grid(row=0, column=0, sticky="nw")
+        btn_layout = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.accept)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
 
-        # wrap label & description
-        label_text = g.get("label", "")
-        desc_text  = g.get("description", "")
-        wrapped_label = "\n".join(textwrap.wrap(label_text, width=30))
-        wrapped_desc  = "\n".join(textwrap.wrap(desc_text,  width=40))
-        amount_line   = f"${g.get('currentAmount',0)//1000} / ${g['goalAmount']//1000}"
-        full_text = wrapped_label
-        if wrapped_desc:
-            full_text += "\n" + wrapped_desc
-        full_text += "\n" + amount_line
+    def get_values(self):
+        return self.auth_in.text().strip(), self.chatid_in.text().strip()
 
-        # multi-line label
-        lbl = ctk.CTkLabel(
-            container,
-            text=full_text,
-            anchor="w",
-            justify="left",
-            wraplength=300
-        )
-        lbl.grid(row=0, column=1, sticky="w", padx=(10,0))
+class GoalManager(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Fansly Goal Manager")
+        self.resize(1000, 600)
 
-def on_select_goal():
-    g = goals_dict[selected_goal_var.get()]
-    entry_amount.delete(0, "end"); entry_amount.insert(0, str(g["goalAmount"]//1000))
-    entry_label.delete(0, "end"); entry_label.insert(0, g["label"])
-    entry_desc.delete(0, "end"); entry_desc.insert(0, g["description"])
-    update_btn.configure(state="normal")
+        auth, chat_id, loaded_presets = load_config()
+        if not auth or not chat_id:
+            dlg = ConfigDialog()
+            if dlg.exec() != QDialog.Accepted:
+                sys.exit(0)
+            auth, chat_id = dlg.get_values()
+            if not auth or not chat_id:
+                QMessageBox.critical(None, "Missing Input", "Auth Token and ChatRoom ID are required.")
+                sys.exit(0)
+            save_config(auth, chat_id, loaded_presets)
 
-def send_goal():
-    try:
-        ua = int(entry_amount.get())
-    except:
-        return messagebox.showerror("Input Error", "Enter whole dollars")
-    pl = {
-        "chatRoomId": CHATROOM_ID,
-        "type": 0,
-        "goalAmount": ua*1000,
-        "label": entry_label.get().strip(),
-        "description": entry_desc.get().strip()
-    }
-    r = requests.post(CREATE_URL, json=pl, headers=HEADERS)
-    if r.status_code//100 == 2:
-        fetch_and_display_goals()
-    else:
-        messagebox.showerror("Error", f"{r.status_code}")
+        self.AUTH_TOKEN = auth
+        self.CHAT_ID = chat_id
+        self.PRESETS = loaded_presets or {}
 
-def update_goal():
-    gid = selected_goal_var.get()
-    g = goals_dict[gid]
-    try:
-        ua = int(entry_amount.get())
-    except:
-        return messagebox.showerror("Input Error", "Enter whole dollars")
-    pl = {
-        "id": g["id"], "chatRoomId": CHATROOM_ID,
-        "accountId": g["accountId"],
-        "currentAmount": g.get("currentAmount",0),
-        "deletedAt": g.get("deletedAt",0),
-        "description": entry_desc.get().strip(),
-        "goalAmount": ua*1000,
-        "label": entry_label.get().strip(),
-        "status": g.get("status",0),
-        "type": g.get("type",0),
-        "version": g.get("version",0)
-    }
-    r = requests.post(UPDATE_URL, json=pl, headers=HEADERS)
-    if r.status_code//100 == 2:
-        fetch_and_display_goals()
-    else:
-        messagebox.showerror("Error", f"{r.status_code}")
-    update_btn.configure(state="disabled")
-
-def delete_all_goals():
-    resp = requests.get(BASE_URL, params=FETCH_PARAMS, headers=HEADERS)
-    if resp.status_code != 200:
-        return messagebox.showerror("Error", f"{resp.status_code}")
-    for g in resp.json().get("response", []):
-        pl = {
-            "id": g["id"], "chatRoomId": CHATROOM_ID,
-            "accountId": g["accountId"],
-            "currentAmount": g.get("currentAmount",0),
-            "deletedAt": int(time.time()*1000),
-            "description": g.get("description",""),
-            "goalAmount": g["goalAmount"],
-            "label": g["label"],
-            "status": 1, "type": g.get("type",0),
-            "version": g.get("version",0)
+        self.HEADERS = {
+            "Authorization": self.AUTH_TOKEN,
+            "Content-Type": "application/json"
         }
-        requests.post(UPDATE_URL, json=pl, headers=HEADERS)
-    fetch_and_display_goals()
+        self.BASE_URL = "https://apiv3.fansly.com/api/v1/chatroom/goals"
+        self.CREATE_URL = self.BASE_URL + "?ngsw-bypass=true"
+        self.UPDATE_URL = "https://apiv3.fansly.com/api/v1/chatroom/goal/update?ngsw-bypass=true"
 
-# ————— New reset_goal action —————
-def reset_goal():
-    gid = selected_goal_var.get()
-    if not gid:
-        return messagebox.showwarning("No Selection", "Select a goal first")
-    g = goals_dict[gid]
-    # store original
-    label = g.get("label", "")
-    desc  = g.get("description", "")
-    amt   = g.get("goalAmount", 0)
+        self.goals = []
+        self.font = QFont("Segoe UI Emoji", 12)
+        self.radio_buttons = []
+        self.labels = []
 
-    # delete it
-    pl_del = {
-        "id": g["id"], "chatRoomId": CHATROOM_ID,
-        "accountId": g["accountId"],
-        "currentAmount": g.get("currentAmount",0),
-        "deletedAt": int(time.time()*1000),
-        "description": desc,
-        "goalAmount": amt,
-        "label": label,
-        "status": 1, "type": g.get("type",0),
-        "version": g.get("version",0)
-    }
-    r1 = requests.post(UPDATE_URL, json=pl_del, headers=HEADERS)
-    if r1.status_code//100 != 2:
-        return messagebox.showerror("Error", f"Reset delete failed: {r1.status_code}")
+        outer = QVBoxLayout(self)
+        main_layout = QHBoxLayout()
+        main_layout.addLayout(self.build_left_panel(), 1)
+        main_layout.addLayout(self.build_middle_panel(), 1)
+        main_layout.addLayout(self.build_right_panel(), 2)
+        outer.addLayout(main_layout)
 
-    # recreate fresh
-    pl_new = {
-        "chatRoomId": CHATROOM_ID,
-        "type": 0,
-        "goalAmount": amt,
-        "label": label,
-        "description": desc
-    }
-    r2 = requests.post(CREATE_URL, json=pl_new, headers=HEADERS)
-    if r2.status_code//100 == 2:
-        fetch_and_display_goals()
-    else:
-        messagebox.showerror("Error", f"Reset create failed: {r2.status_code}")
+        footer = QHBoxLayout()
+        credit = QLabel("made with love by cutezam")
+        credit.setFont(QFont("Segoe UI Emoji", 8))
+        credit.setStyleSheet("color: gray;")
+        footer.addWidget(credit, alignment=Qt.AlignLeft)
+        footer.addStretch(1)
+        outer.addLayout(footer)
 
-def save_preset(group, slot):
-    try:
-        ua = int(entry_amount.get())
-    except:
-        return messagebox.showerror("Input Error", "Enter whole dollars")
-    presets[group][slot] = {
-        "chatRoomId": CHATROOM_ID, "type": 0,
-        "goalAmount": ua*1000,
-        "label": entry_label.get().strip(),
-        "description": entry_desc.get().strip()
-    }
-    messagebox.showinfo("Saved", f"Group {group} Slot {slot}")
+        self.fetch_goals()
 
-def edit_preset(group, slot):
-    pl = presets[group].get(slot)
-    if not pl:
-        return messagebox.showwarning("No preset", f"Slot {slot} empty")
-    entry_amount.delete(0, "end"); entry_amount.insert(0, str(pl["goalAmount"]//1000))
-    entry_label.delete(0, "end"); entry_label.insert(0, pl["label"])
-    entry_desc.delete(0, "end"); entry_desc.insert(0, pl["description"])
+    def build_left_panel(self):
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Goal Amount"))
+        self.amount_in = QLineEdit(); self.amount_in.setFont(self.font)
+        left.addWidget(self.amount_in)
 
-def send_group_presets(group):
-    for pl in presets[group].values():
-        if pl:
-            requests.post(CREATE_URL, json=pl, headers=HEADERS)
-    fetch_and_display_goals()
+        left.addWidget(QLabel("Label"))
+        self.label_in = QLineEdit(); self.label_in.setFont(self.font)
+        left.addWidget(self.label_in)
 
-# ————— Build UI —————
+        left.addWidget(QLabel("Description"))
+        self.desc_in = QTextEdit(); self.desc_in.setFont(self.font)
+        left.addWidget(self.desc_in)
 
-# Left column
-left = ctk.CTkFrame(app, fg_color="#1f1f1f", corner_radius=10)
-left.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-left.grid_columnconfigure(0, weight=1)
+        for text, slot in [
+            ("Send Goal", self.send_goal),
+            ("Fetch Goals", self.fetch_goals),
+            ("Delete Selected Goal", self.delete_selected_goal),
+            ("Delete All Goals", self.delete_all_goals),
+            ("Update Goal", self.update_goal),
+            ("Reset Goal Amount select", self.reset_goal)
+        ]:
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            b.setFont(self.font)
+            left.addWidget(b)
 
-for i, label in enumerate(("Goal Amount","Label","Description")):
-    ctk.CTkLabel(left, text=label, anchor="w")\
-       .grid(row=i*2, column=0, sticky="w", padx=10, pady=(10,2))
-    e = ctk.CTkEntry(left)
-    e.grid(row=i*2+1, column=0, sticky="ew", padx=10)
-    if i==0: entry_amount=e
-    elif i==1: entry_label=e
-    else: entry_desc=e
+        left.addStretch(1)
+        return left
 
-actions = [
-    ("Send Goal", send_goal),
-    ("Fetch Goals", fetch_and_display_goals),
-    ("Delete All Goals", delete_all_goals),
-    ("Update Goal", update_goal)
-]
-for j,(text,cmd) in enumerate(actions):
-    btn = ctk.CTkButton(left, text=text, command=cmd, width=180)
-    btn.grid(row=6+j, column=0, pady=5)
-    if text=="Update Goal":
-        update_btn=btn
-        btn.configure(state="disabled")
+    def build_middle_panel(self):
+        mid = QVBoxLayout()
+        hdr = QLabel("Presets", alignment=Qt.AlignCenter)
+        hdr.setFont(self.font)
+        mid.addWidget(hdr)
 
-# ————— Reset Goal button —————
-reset_btn = ctk.CTkButton(left, text="Reset Goal", command=reset_goal, width=180)
-reset_btn.grid(row=6+len(actions), column=0, pady=5)
+        self.tabs = QTabWidget()
+        self.tabs.setFont(self.font)
+        for g in (1, 2, 3):
+            page = QWidget()
+            grid = QGridLayout(page)
+            for i, slot in enumerate((1, 2, 3)):
+                sv = QPushButton(f"Save {slot}")
+                ed = QPushButton(f"Edit {slot}")
+                sv.clicked.connect(lambda _, g=g, s=slot: self.save_preset(g, s))
+                ed.clicked.connect(lambda _, g=g, s=slot: self.edit_preset(g, s))
+                sv.setFont(self.font); ed.setFont(self.font)
+                grid.addWidget(sv, 0, i)
+                grid.addWidget(ed, 1, i)
+            send = QPushButton("Send Presets")
+            send.clicked.connect(lambda _, g=g: self.send_presets(g))
+            send.setFont(self.font)
+            grid.addWidget(send, 2, 0, 1, 3)
+            self.tabs.addTab(page, f"Group {g}")
+        mid.addWidget(self.tabs)
+        mid.addStretch(1)
+        return mid
 
-# Middle column: Presets
-mid = ctk.CTkFrame(app, fg_color="#1f1f1f", corner_radius=10)
-mid.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-mid.grid_columnconfigure(0, weight=1)
-mid.grid_rowconfigure(1, weight=1)
+    def build_right_panel(self):
+        right = QGridLayout()
+        hdr = QLabel("Current Goals", alignment=Qt.AlignCenter)
+        hdr.setFont(self.font)
+        right.addWidget(hdr, 0, 0, 1, 2)
 
-ctk.CTkLabel(mid, text="Presets", font=ctk.CTkFont(size=18, weight="bold"))\
-   .grid(row=0, column=0, pady=(10,5))
+        self.radio_group = QButtonGroup(self)
+        for i in range(3):
+            rb = QRadioButton()
+            rb.setFont(self.font)
+            rb.toggled.connect(self.load_selected)
+            lbl = QLabel()
+            lbl.setFont(self.font)
+            lbl.setWordWrap(True)
 
-tab = ctk.CTkTabview(mid)
-tab.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-for grp in (1,2,3):
-    tab.add(f"Group {grp}")
-    frame = tab.tab(f"Group {grp}")
-    frame.grid_columnconfigure((0,1,2), weight=1)
+            self.radio_group.addButton(rb, i)
+            self.radio_buttons.append(rb)
+            self.labels.append(lbl)
 
-    for idx, slot in enumerate((1,2,3)):
-        ctk.CTkButton(
-            frame, text=f"Save {slot}",
-            command=lambda g=grp,s=slot: save_preset(g,s)
-        ).grid(row=0, column=idx, padx=5, pady=(10,5))
-        ctk.CTkButton(
-            frame, text=f"Edit {slot}",
-            command=lambda g=grp,s=slot: edit_preset(g,s)
-        ).grid(row=1, column=idx, padx=5, pady=(0,10))
+            right.addWidget(rb, 1 + i, 0, alignment=Qt.AlignTop)
+            right.addWidget(lbl, 1 + i, 1)
 
-    ctk.CTkButton(
-        frame, text="Send Presets",
-        command=lambda g=grp: send_group_presets(g),
-        width=260
-    ).grid(row=2, column=0, columnspan=3, pady=(0,15))
+        right.setColumnStretch(1, 1)
+        return right
 
-# Right column: Current Goals
-right_frame = ctk.CTkFrame(app, fg_color="#1f1f1f", corner_radius=10)
-right_frame.grid(row=0, column=2, sticky="nsew", padx=10, pady=10)
-right_frame.grid_columnconfigure(0, weight=1)
-right_frame.grid_rowconfigure(1, weight=1)
+    def fetch_goals(self):
+        try:
+            params = {"chatRoomIds": self.CHAT_ID, "ngsw-bypass": "true"}
+            r = requests.get(self.BASE_URL, params=params, headers=self.HEADERS)
+            r.raise_for_status()
+            data = r.json().get("response", [])[:3]
+        except Exception as e:
+            QMessageBox.critical(self, "Fetch Error", str(e))
+            data = []
 
-ctk.CTkLabel(
-    right_frame, text="Current Goals",
-    font=ctk.CTkFont(size=18, weight="bold")
-).grid(row=0, column=0, pady=(10,5))
+        self.goals = data
+        for i in range(3):
+            if i < len(data):
+                g = data[i]
+                text = "\n".join(textwrap.wrap(g.get("label", ""), width=30))
+                desc = "\n".join(textwrap.wrap(g.get("description", ""), width=40))
+                amt = f"$ {g.get('currentAmount', 0) // 1000} / $ {g['goalAmount'] // 1000}"
+                self.labels[i].setText(f"{text}\n{desc}\n{amt}")
+                self.radio_buttons[i].setEnabled(True)
+            else:
+                self.labels[i].clear()
+                self.radio_buttons[i].setChecked(False)
+                self.radio_buttons[i].setEnabled(False)
 
-goals_list_frame = ctk.CTkFrame(right_frame)
-goals_list_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-build_goals_list(right_frame)
+    def load_selected(self):
+        idx = self.radio_group.checkedId()
+        if idx < 0 or idx >= len(self.goals):
+            return
+        g = self.goals[idx]
+        self.amount_in.setText(str(g["goalAmount"] // 1000))
+        self.label_in.setText(g.get("label", ""))
+        self.desc_in.setPlainText(g.get("description", ""))
 
-# Save on exit
-app.protocol("WM_DELETE_WINDOW", lambda: (
-    save_config(AUTH_TOKEN, CHATROOM_ID, presets),
-    app.destroy()
-))
+    def send_goal(self):
+        try:
+            amt = int(self.amount_in.text())
+        except:
+            QMessageBox.warning(self, "Input Error", "Enter whole dollars")
+            return
+        pl = {
+            "chatRoomId": self.CHAT_ID,
+            "type": 0,
+            "goalAmount": amt * 1000,
+            "label": self.label_in.text().strip(),
+            "description": self.desc_in.toPlainText().strip()
+        }
+        r = requests.post(self.CREATE_URL, json=pl, headers=self.HEADERS)
+        if r.status_code // 100 == 2:
+            self.fetch_goals()
+        else:
+            QMessageBox.critical(self, "Error", f"{r.status_code}")
 
-app.mainloop()
+    def delete_selected_goal(self):
+        idx = self.radio_group.checkedId()
+        if idx < 0:
+            QMessageBox.warning(self, "No selection", "Select a goal first")
+            return
+        g = self.goals[idx]
+        pl = {
+            "id": g["id"], "chatRoomId": self.CHAT_ID, "accountId": g["accountId"],
+            "currentAmount": g.get("currentAmount", 0), "deletedAt": int(time.time() * 1000),
+            "description": g.get("description", ""), "goalAmount": g["goalAmount"],
+            "label": g["label"], "status": 1, "type": g.get("type", 0), "version": g.get("version", 0)
+        }
+        r = requests.post(self.UPDATE_URL, json=pl, headers=self.HEADERS)
+        if r.status_code // 100 == 2:
+            self.fetch_goals()
+        else:
+            QMessageBox.critical(self, "Error", f"Delete failed: {r.status_code}")
+
+    def update_goal(self):
+        idx = self.radio_group.checkedId()
+        if idx < 0:
+            QMessageBox.warning(self, "No selection", "Select a goal first")
+            return
+        g = self.goals[idx]
+        try:
+            amt = int(self.amount_in.text())
+        except:
+            QMessageBox.warning(self, "Input Error", "Enter whole dollars")
+            return
+        pl = {
+            "id": g["id"], "chatRoomId": self.CHAT_ID, "accountId": g["accountId"],
+            "currentAmount": g.get("currentAmount", 0), "deletedAt": g.get("deletedAt", 0),
+            "description": self.desc_in.toPlainText().strip(),
+            "goalAmount": amt * 1000, "label": self.label_in.text().strip(),
+            "status": g.get("status", 0), "type": g.get("type", 0), "version": g.get("version", 0)
+        }
+        r = requests.post(self.UPDATE_URL, json=pl, headers=self.HEADERS)
+        if r.status_code // 100 == 2:
+            self.fetch_goals()
+        else:
+            QMessageBox.critical(self, "Error", f"{r.status_code}")
+
+    def delete_all_goals(self):
+        try:
+            params = {"chatRoomIds": self.CHAT_ID, "ngsw-bypass": "true"}
+            r = requests.get(self.BASE_URL, params=params, headers=self.HEADERS)
+            r.raise_for_status()
+            items = r.json().get("response", [])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        for g in items:
+            pl = {
+                "id": g["id"], "chatRoomId": self.CHAT_ID, "accountId": g["accountId"],
+                "currentAmount": g.get("currentAmount", 0), "deletedAt": int(time.time() * 1000),
+                "description": g.get("description", ""), "goalAmount": g["goalAmount"],
+                "label": g["label"], "status": 1, "type": g.get("type", 0), "version": g.get("version", 0)
+            }
+            requests.post(self.UPDATE_URL, json=pl, headers=self.HEADERS)
+        self.fetch_goals()
+
+    def reset_goal(self):
+        idx = self.radio_group.checkedId()
+        if idx < 0:
+            QMessageBox.warning(self, "No selection", "Select a goal first")
+            return
+        g = self.goals[idx]
+        pl_del = {
+            "id": g["id"], "chatRoomId": self.CHAT_ID, "accountId": g["accountId"],
+            "currentAmount": g.get("currentAmount", 0), "deletedAt": int(time.time() * 1000),
+            "description": g.get("description", ""), "goalAmount": g["goalAmount"],
+            "label": g["label"], "status": 1, "type": g.get("type", 0), "version": g.get("version", 0)
+        }
+        r1 = requests.post(self.UPDATE_URL, json=pl_del, headers=self.HEADERS)
+        if r1.status_code // 100 != 2:
+            QMessageBox.critical(self, "Error", f"Reset delete failed: {r1.status_code}")
+            return
+
+        pl_new = {
+            "chatRoomId": self.CHAT_ID, "type": 0, "goalAmount": g["goalAmount"],
+            "label": g["label"], "description": g["description"]
+        }
+        r2 = requests.post(self.CREATE_URL, json=pl_new, headers=self.HEADERS)
+        if r2.status_code // 100 == 2:
+            self.fetch_goals()
+        else:
+            QMessageBox.critical(self, "Error", f"Reset create failed: {r2.status_code}")
+
+    def save_preset(self, group, slot):
+        try:
+            amt = int(self.amount_in.text())
+        except:
+            QMessageBox.warning(self, "Input Error", "Enter whole dollars")
+            return
+        self.PRESETS.setdefault(group, {})[slot] = {
+            "chatRoomId": self.CHAT_ID, "type": 0,
+            "goalAmount": amt * 1000,
+            "label": self.label_in.text().strip(),
+            "description": self.desc_in.toPlainText().strip()
+        }
+        save_config(self.AUTH_TOKEN, self.CHAT_ID, self.PRESETS)
+        QMessageBox.information(self, "Saved", f"Group {group} Slot {slot}")
+
+    def edit_preset(self, group, slot):
+        pl = self.PRESETS.get(group, {}).get(slot)
+        if not pl:
+            QMessageBox.warning(self, "No preset", f"Slot {slot} empty")
+            return
+        self.amount_in.setText(str(pl["goalAmount"] // 1000))
+        self.label_in.setText(pl["label"])
+        self.desc_in.setPlainText(pl["description"])
+
+    def send_presets(self, group):
+        for pl in self.PRESETS.get(group, {}).values():
+            requests.post(self.CREATE_URL, json=pl, headers=self.HEADERS)
+        self.fetch_goals()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(53,53,53))
+    palette.setColor(QPalette.WindowText, Qt.white)
+    palette.setColor(QPalette.Base, QColor(35,35,35))
+    palette.setColor(QPalette.AlternateBase, QColor(53,53,53))
+    palette.setColor(QPalette.ToolTipBase, Qt.white)
+    palette.setColor(QPalette.ToolTipText, Qt.white)
+    palette.setColor(QPalette.Text, Qt.white)
+    palette.setColor(QPalette.Button, QColor(53,53,53))
+    palette.setColor(QPalette.ButtonText, Qt.white)
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor(42,130,218))
+    palette.setColor(QPalette.Highlight, QColor(42,130,218))
+    palette.setColor(QPalette.HighlightedText, Qt.black)
+    app.setPalette(palette)
+
+    check_for_update()  # ✅ Show popup if newer version exists
+
+    w = GoalManager()
+    w.show()
+    sys.exit(app.exec())
