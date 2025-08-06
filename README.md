@@ -12,7 +12,9 @@ Features
 -update goals
 
 
-<img width="1002" height="632" alt="FanslyGoalManager_4M11dMW14X" src="https://github.com/user-attachments/assets/1d1cdf27-edac-4df3-8034-3316f5c945e2" />
+<img width="1002" height="632" alt="FanslyGoalManager_xXBjzs6ViG" src="https://github.com/user-attachments/assets/773163fc-53ff-41dd-b407-8247ea55b8e1" />
+
+
 
 you must use ur authorization token to use this and must get your chatroomid also
 
