@@ -122,7 +122,7 @@ def build_goals_list(parent):
         # radio button with no text
         rb = ctk.CTkRadioButton(
             container,
-            text="",                      # ← hide the built‑in label
+            text="",                      # ← hide the built-in label
             variable=selected_goal_var,
             value=g["id"],
             command=on_select_goal
@@ -220,6 +220,47 @@ def delete_all_goals():
         requests.post(UPDATE_URL, json=pl, headers=HEADERS)
     fetch_and_display_goals()
 
+# ————— New reset_goal action —————
+def reset_goal():
+    gid = selected_goal_var.get()
+    if not gid:
+        return messagebox.showwarning("No Selection", "Select a goal first")
+    g = goals_dict[gid]
+    # store original
+    label = g.get("label", "")
+    desc  = g.get("description", "")
+    amt   = g.get("goalAmount", 0)
+
+    # delete it
+    pl_del = {
+        "id": g["id"], "chatRoomId": CHATROOM_ID,
+        "accountId": g["accountId"],
+        "currentAmount": g.get("currentAmount",0),
+        "deletedAt": int(time.time()*1000),
+        "description": desc,
+        "goalAmount": amt,
+        "label": label,
+        "status": 1, "type": g.get("type",0),
+        "version": g.get("version",0)
+    }
+    r1 = requests.post(UPDATE_URL, json=pl_del, headers=HEADERS)
+    if r1.status_code//100 != 2:
+        return messagebox.showerror("Error", f"Reset delete failed: {r1.status_code}")
+
+    # recreate fresh
+    pl_new = {
+        "chatRoomId": CHATROOM_ID,
+        "type": 0,
+        "goalAmount": amt,
+        "label": label,
+        "description": desc
+    }
+    r2 = requests.post(CREATE_URL, json=pl_new, headers=HEADERS)
+    if r2.status_code//100 == 2:
+        fetch_and_display_goals()
+    else:
+        messagebox.showerror("Error", f"Reset create failed: {r2.status_code}")
+
 def save_preset(group, slot):
     try:
         ua = int(entry_amount.get())
@@ -275,6 +316,10 @@ for j,(text,cmd) in enumerate(actions):
     if text=="Update Goal":
         update_btn=btn
         btn.configure(state="disabled")
+
+# ————— Reset Goal button —————
+reset_btn = ctk.CTkButton(left, text="Reset Goal", command=reset_goal, width=180)
+reset_btn.grid(row=6+len(actions), column=0, pady=5)
 
 # Middle column: Presets
 mid = ctk.CTkFrame(app, fg_color="#1f1f1f", corner_radius=10)
