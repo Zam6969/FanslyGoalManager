@@ -8,7 +8,6 @@ import webbrowser
 from io import BytesIO
 from PySide6.QtGui import QPainter, QPainterPath
 
-
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QTabWidget, QRadioButton,
@@ -23,7 +22,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- Program version ---
-PROGRAM_VERSION = "1.0.3"
+PROGRAM_VERSION = "1.0.6"  # bumped
 UPDATE_CHECK_URL = "https://raw.githubusercontent.com/Zam6969/FanslyGoalManager/refs/heads/main/version.txt"
 GITHUB_REPO_URL = "https://github.com/Zam6969/FanslyGoalManager"
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "fansly_config.json")
@@ -113,7 +112,30 @@ def load_config():
         return d.get("AUTH_TOKEN"), d.get("CHATROOM_ID"), d.get("PRESETS", {})
     return None, None, {}
 
+def normalize_presets(presets_obj):
+    """
+    Ensure group and slot keys are strings and remove any None slots.
+    Also ensure each group is a dict.
+    """
+    norm = {}
+    if not isinstance(presets_obj, dict):
+        return norm
+    for gk, group_val in presets_obj.items():
+        sg = str(gk)
+        if not isinstance(group_val, dict):
+            continue
+        norm[sg] = {}
+        for sk, slot_val in group_val.items():
+            ss = str(sk)
+            if slot_val is None:
+                continue
+            if isinstance(slot_val, dict):
+                norm[sg][ss] = slot_val
+    return norm
+
 def save_config(auth, chat_id, presets):
+    # Always dump a normalized version to avoid stray None/incorrect keys
+    presets = normalize_presets(presets)
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         json.dump({
             "AUTH_TOKEN": auth,
@@ -143,6 +165,7 @@ def check_for_update():
                 webbrowser.open(GITHUB_REPO_URL)
     except Exception as e:
         print(f"[WARN] Version check failed: {e}")
+
 
 class LoginDialog(QDialog):
     def __init__(self):
@@ -183,11 +206,12 @@ class GoalManager(QWidget):
                 sys.exit(0)
 
             auth, chat_id = dlg.token, dlg.chat_id
-            save_config(auth, chat_id, loaded_presets)    
+            save_config(auth, chat_id, loaded_presets)
 
         self.AUTH_TOKEN = auth
-        self.CHAT_ID = chat_id
-        self.PRESETS = loaded_presets or {}
+        self.CHAT_ID = chat_id  # this is the chatRoomId
+        # Normalize presets immediately so lookups are consistent
+        self.PRESETS = normalize_presets(loaded_presets or {})
         self.HEADERS = {
             "Authorization": self.AUTH_TOKEN,
             "Content-Type": "application/json"
@@ -195,6 +219,13 @@ class GoalManager(QWidget):
         self.BASE_URL = "https://apiv3.fansly.com/api/v1/chatroom/goals"
         self.CREATE_URL = self.BASE_URL + "?ngsw-bypass=true"
         self.UPDATE_URL = "https://apiv3.fansly.com/api/v1/chatroom/goal/update?ngsw-bypass=true"
+
+        # --- streaming channel update + read endpoints/state ---
+        self.CHANNEL_UPDATE_URL = "https://apiv3.fansly.com/api/v1/streaming/channel/update?ngsw-bypass=true"
+        self.ACCOUNT_ID = None     # your Fansly account id
+        self.CHANNEL_ID = None     # streaming channel id
+        self.CHANNEL_VERSION = None
+
         self.goals = []
         self.font = QFont("Segoe UI Emoji", 12)
         self.radio_buttons = []
@@ -214,6 +245,32 @@ class GoalManager(QWidget):
         top_bar.addWidget(self.welcome_label)
 
         top_bar.addStretch()
+
+        # ---------- Stream Title editor UI on the right of the top bar ----------
+        title_box = QVBoxLayout()
+        self.stream_title_hdr = QLabel("Stream Title")
+        self.stream_title_hdr.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.stream_title_hdr.setAlignment(Qt.AlignLeft)
+
+        self.title_in = QLineEdit()
+        self.title_in.setFont(self.font)
+        self.title_in.setPlaceholderText("Type your stream title…")
+
+        self.title_update_btn = QPushButton("Update")
+        self.title_update_btn.setFont(self.font)
+        self.title_update_btn.clicked.connect(self.update_stream_title)
+
+        self.current_title_lbl = QLabel("Current Title: —")
+        self.current_title_lbl.setFont(QFont("Segoe UI", 10))
+        self.current_title_lbl.setStyleSheet("color: #cfcfcf")
+
+        title_box.addWidget(self.stream_title_hdr)
+        title_box.addWidget(self.title_in)
+        title_box.addWidget(self.title_update_btn)
+        title_box.addWidget(self.current_title_lbl)
+        top_bar.addLayout(title_box)
+        # -----------------------------------------------------------------------
+
         outer.addLayout(top_bar)
 
         main_layout = QHBoxLayout()
@@ -231,7 +288,7 @@ class GoalManager(QWidget):
         outer.addLayout(footer)
 
         self.fetch_goals()
-        self.load_account_status()
+        self.load_account_status()  # populates title + channel info
 
     def make_circular_pixmap(self, pixmap):
         size = min(pixmap.width(), pixmap.height())
@@ -250,16 +307,23 @@ class GoalManager(QWidget):
         return rounded
 
     def load_account_status(self):
+        """
+        Loads account info, updates welcome/avatars, and fetches streaming channel
+        identifiers + current title using streaming/channel/{ACCOUNT_ID}.
+        """
         try:
+            # 1) Get account/me for username, avatar, and account id
             r = requests.get("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers=self.HEADERS)
             r.raise_for_status()
             data = r.json()
             if data.get("success") and "response" in data:
                 account = data["response"]["account"]
                 username = account.get("username", "Unknown")
+                self.ACCOUNT_ID = account.get("id") or account.get("accountId")
                 self.welcome_label.setText(f"Welcome {username} – You are currently logged in")
                 self.welcome_label.setStyleSheet("color: lightgreen; font-size: 14px;")
 
+                # Avatar
                 avatar = account.get("avatar", {})
                 avatar_url = None
                 for variant in avatar.get("variants", []):
@@ -273,15 +337,102 @@ class GoalManager(QWidget):
                     pixmap = QPixmap()
                     pixmap.loadFromData(img_data)
                     self.avatar_label.setPixmap(self.make_circular_pixmap(pixmap))
+
+                # 2) Fetch streaming channel info (the place with the live stream 'title')
+                if self.ACCOUNT_ID:
+                    url = f"https://apiv3.fansly.com/api/v1/streaming/channel/{self.ACCOUNT_ID}?ngsw-bypass=true"
+                    rc = requests.get(url, headers=self.HEADERS)
+                    rc.raise_for_status()
+                    chan_data = rc.json()
+                    if chan_data.get("success") and "response" in chan_data:
+                        resp = chan_data["response"]
+                        self.CHANNEL_ID = resp.get("id") or resp.get("channelId")
+                        self.CHANNEL_VERSION = resp.get("version")
+                        stream_info = resp.get("stream", {}) or {}
+                        current_title = stream_info.get("title") or ""
+                        if current_title:
+                            self.title_in.setText(current_title)
+                            self.current_title_lbl.setText(f"Current Title: {current_title}")
+                        else:
+                            self.current_title_lbl.setText("Current Title: —")
             else:
                 self.welcome_label.setText("You are not logged in")
                 self.welcome_label.setStyleSheet("color: red; font-size: 14px;")
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] load_account_status failed: {e}")
             self.welcome_label.setText("You are not logged in")
             self.welcome_label.setStyleSheet("color: red; font-size: 14px;")
 
+    # ---------------------- Stream title update logic ----------------------
+    def update_stream_title(self):
+        """
+        Updates the stream title via streaming/channel/update. Tries minimal
+        payload first, then a richer payload if the API requires it.
+        """
+        new_title = self.title_in.text().strip()
+        if not new_title:
+            QMessageBox.warning(self, "Missing Title", "Please enter a stream title.")
+            return
 
+        if not self.CHANNEL_ID or not self.ACCOUNT_ID:
+            # Refresh identifiers once if missing
+            self.load_account_status()
+            if not self.CHANNEL_ID:
+                QMessageBox.critical(self, "Channel Missing", "Could not determine your channel ID.")
+                return
 
+        attempts = [
+            # Minimal
+            {"id": self.CHANNEL_ID, "streamTitle": new_title},
+            # Rich (with more context)
+            {
+                "id": self.CHANNEL_ID,
+                "chatRoomId": self.CHAT_ID,
+                "accountId": self.ACCOUNT_ID,
+                "streamTitle": new_title,
+                **({"version": self.CHANNEL_VERSION} if self.CHANNEL_VERSION is not None else {})
+            }
+        ]
+
+        last_status = None
+        last_text = None
+        for pl in attempts:
+            try:
+                r = requests.post(self.CHANNEL_UPDATE_URL, json=pl, headers=self.HEADERS, timeout=10)
+                last_status = r.status_code
+                last_text = r.text
+                if r.status_code // 100 == 2:
+                    self.refresh_current_title()
+                    QMessageBox.information(self, "Updated", "Stream title updated successfully.")
+                    return
+            except Exception as e:
+                last_text = str(e)
+
+        QMessageBox.critical(self, "Update Failed", f"HTTP {last_status or '?'}\n{last_text or 'Unknown error'}")
+
+    def refresh_current_title(self):
+        """
+        Refreshes the current title using streaming/channel/{ACCOUNT_ID} and updates
+        UI + stored version if returned.
+        """
+        if not self.ACCOUNT_ID:
+            return
+        try:
+            url = f"https://apiv3.fansly.com/api/v1/streaming/channel/{self.ACCOUNT_ID}?ngsw-bypass=true"
+            rc = requests.get(url, headers=self.HEADERS, timeout=8)
+            rc.raise_for_status()
+            chan_data = rc.json().get("response", {})
+            self.CHANNEL_ID = chan_data.get("id") or chan_data.get("channelId") or self.CHANNEL_ID
+            self.CHANNEL_VERSION = chan_data.get("version", self.CHANNEL_VERSION)
+            stream_info = chan_data.get("stream", {}) or {}
+            current_title = stream_info.get("title") or ""
+            if current_title:
+                self.current_title_lbl.setText(f"Current Title: {current_title}")
+                if not self.title_in.text().strip():
+                    self.title_in.setText(current_title)
+        except Exception as e:
+            print(f"[WARN] refresh_current_title failed: {e}")
+    # ----------------------------------------------------------------------
 
     def build_left_panel(self):
         left = QVBoxLayout()
@@ -497,12 +648,18 @@ class GoalManager(QWidget):
             QMessageBox.critical(self, "Error", f"Reset create failed: {r2.status_code}")
 
     def save_preset(self, group, slot):
+        """
+        Save the current inputs into PRESETS[group][slot].
+        Keys are always strings to avoid JSON reload mismatch.
+        """
         try:
             amt = int(self.amount_in.text())
         except:
             QMessageBox.warning(self, "Input Error", "Enter whole dollars")
             return
-        self.PRESETS.setdefault(group, {})[slot] = {
+        gk = str(group)
+        sk = str(slot)
+        self.PRESETS.setdefault(gk, {})[sk] = {
             "chatRoomId": self.CHAT_ID, "type": 0,
             "goalAmount": amt * 1000,
             "label": self.label_in.text().strip(),
@@ -512,24 +669,31 @@ class GoalManager(QWidget):
         QMessageBox.information(self, "Saved", f"Group {group} Slot {slot}")
 
     def edit_preset(self, group, slot):
-        pl = self.PRESETS.get(group, {}).get(slot)
+        gk = str(group)
+        sk = str(slot)
+        pl = self.PRESETS.get(gk, {}).get(sk)
         if not pl:
             QMessageBox.warning(self, "Missing", f"No preset in Group {group} Slot {slot}")
             return
-        self.amount_in.setText(str(pl["goalAmount"] // 1000))
+        self.amount_in.setText(str(pl.get("goalAmount", 0) // 1000))
         self.label_in.setText(pl.get("label", ""))
         self.desc_in.setPlainText(pl.get("description", ""))
 
     def send_presets(self, group):
-        presets = self.PRESETS.get(group, {})
+        gk = str(group)
+        presets = self.PRESETS.get(gk, {})
         if not presets:
             QMessageBox.warning(self, "Missing", f"No presets found for Group {group}")
             return
-        for slot, pl in presets.items():
+        failed = []
+        for sk, pl in presets.items():
             r = requests.post(self.CREATE_URL, json=pl, headers=self.HEADERS)
             if r.status_code // 100 != 2:
-                QMessageBox.warning(self, "Error", f"Slot {slot} failed: {r.status_code}")
+                failed.append((sk, r.status_code))
+        if failed:
+            QMessageBox.warning(self, "Some Failed", "\n".join(f"Slot {s}: {code}" for s, code in failed))
         self.fetch_goals()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -553,5 +717,3 @@ if __name__ == "__main__":
     w = GoalManager()
     w.show()
     sys.exit(app.exec())
-
-
