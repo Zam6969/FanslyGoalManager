@@ -22,7 +22,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- Program version ---
-PROGRAM_VERSION = "1.0.6"  # bumped
+PROGRAM_VERSION = "1.0.4"  # bumped
 UPDATE_CHECK_URL = "https://raw.githubusercontent.com/Zam6969/FanslyGoalManager/refs/heads/main/version.txt"
 GITHUB_REPO_URL = "https://github.com/Zam6969/FanslyGoalManager"
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "fansly_config.json")
